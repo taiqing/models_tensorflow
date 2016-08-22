@@ -15,8 +15,8 @@ if __name__ == '__main__':
     n_class = 10
     n_hidden = 4 * n_input
     batch_size = 100
-    learning_rate = 1e-2
-    n_iteration = 1e5
+    learning_rate = 1e-3
+    n_iteration = 1e6
     valid_steps = 5000
 
     x = tf.placeholder(tf.float32, [None, n_step, n_input])
@@ -45,7 +45,7 @@ if __name__ == '__main__':
     pred = tf.argmax(proba, dimension=1)
     accuracy = tf.reduce_mean(tf.cast(tf.equal(pred, tf.argmax(y, dimension=1)), tf.float32))
     cost = tf.reduce_mean(tf.reduce_sum(-y * tf.log(proba), 1))
-    train_step = tf.train.AdadeltaOptimizer(learning_rate=learning_rate).minimize(cost)
+    train_step = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
 
     mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
     train_x = mnist.train.images.reshape([-1, 28, 28])
