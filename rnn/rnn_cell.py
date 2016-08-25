@@ -59,9 +59,11 @@ if __name__ == '__main__':
     n_class = 10
     n_hidden = 4 * n_input
     batch_size = 100
-    learning_rate = 1e-2
-    n_iteration = 200
-    valid_steps = 100
+    learning_rate = 1e-3
+    # number of mini-batches
+    n_iteration = 10000
+    validation_steps = 50
+    tolerance_steps = 5
     
     tf.reset_default_graph()
     tf.set_random_seed(1234)
@@ -111,23 +113,34 @@ if __name__ == '__main__':
     sess = tf.Session()
     sess.run(tf.initialize_all_variables())
     n_sample = train_x.shape[0]
+    min_valid_loss = np.inf
+    tolerance_counter = 0
     for i in range(int(n_iteration)):
         # validate the model
-        # if i % valid_steps == 0:
-        #    loss, accu = sess.run([cost, accuracy], feed_dict={x: valid_x, y: valid_y})
-        #    print '{i} batches fed in, valid set, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i, l=loss, a=accu * 100.)
+        if i % validation_steps == 0:
+            loss, accu = sess.run([cost, accuracy], feed_dict={x: valid_x, y: valid_y})
+            print '{i} batches fed in, valid set, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i, l=loss, a=accu * 100.)
+            if loss < min_valid_loss:
+                min_valid_loss = loss
+                # clear the tolerance counter
+                tolerance_counter = 0
+            else:
+                tolerance_counter += 1
+                if tolerance_counter >= tolerance_steps:
+                    break
+                
         # get a batch of samples
         idx = np.random.randint(0, n_sample, batch_size)
         batch_x = train_x[idx, :, :]
         batch_y = train_y[idx, :]
         sess.run(train_step, feed_dict={x: batch_x, y: batch_y})
-        if i % 10 == 0:
-            loss, accu, gradient_mag, weights_mag = sess.run([cost, accuracy, grads_mag, tavr_mag],
-                                                             feed_dict={x: batch_x, y: batch_y})
-            print '{i} samples fed in, training minibatch, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i * batch_size, l=loss,
-                                                                                                   a=accu * 100.)
-            print '\tlog(avg grad) {g:.3f}, avg weight {w:.3f}'.format(g=np.log10(np.mean(gradient_mag)),
-                                                                       w=np.mean(weights_mag))
+        # if i % 10 == 0:
+        #     loss, accu, gradient_mag, weights_mag = sess.run([cost, accuracy, grads_mag, tavr_mag],
+        #                                                      feed_dict={x: batch_x, y: batch_y})
+        #     print '{i} samples fed in, training minibatch, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i * batch_size, l=loss,
+        #                                                                                            a=accu * 100.)
+        #     print '\tlog(avg grad) {g:.3f}, avg weight {w:.3f}'.format(g=np.log10(np.mean(gradient_mag)),
+        #                                                                w=np.mean(weights_mag))
     # test the model
     accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
     print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
