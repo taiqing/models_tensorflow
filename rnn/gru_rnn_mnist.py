@@ -67,6 +67,7 @@ if __name__ == '__main__':
         h_c = tf.tanh(tf.matmul(array_ops.concat(1, [r_t * h_prev, x_t]), W_c))
         h_t = (1 - z_t) * h_prev + z_t * h_c
         states.append(h_t)
+    # TODO: check the addition of vector b_out
     proba = tf.nn.softmax(tf.matmul(states[-1], W_out) + b_out)
     pred = tf.argmax(proba, dimension=1)
     accuracy = tf.reduce_mean(tf.cast(tf.equal(pred, tf.argmax(y, dimension=1)), tf.float32))
