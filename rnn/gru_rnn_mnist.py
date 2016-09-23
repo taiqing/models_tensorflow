@@ -31,8 +31,9 @@ if __name__ == '__main__':
     n_hidden = 4 * n_input
     batch_size = 100
     learning_rate = 1e-2
-    n_iteration = 200
-    valid_steps = 100
+    n_iteration = 1000
+    validate_steps = 100
+    display_steps = 100
 
     x = tf.placeholder(tf.float32, [None, n_step, n_input])
     y = tf.placeholder(tf.float32, [None, n_class])
@@ -67,7 +68,6 @@ if __name__ == '__main__':
         h_c = tf.tanh(tf.matmul(array_ops.concat(1, [r_t * h_prev, x_t]), W_c))
         h_t = (1 - z_t) * h_prev + z_t * h_c
         states.append(h_t)
-    # TODO: check the addition of vector b_out
     proba = tf.nn.softmax(tf.matmul(states[-1], W_out) + b_out)
     pred = tf.argmax(proba, dimension=1)
     accuracy = tf.reduce_mean(tf.cast(tf.equal(pred, tf.argmax(y, dimension=1)), tf.float32))
@@ -98,7 +98,7 @@ if __name__ == '__main__':
     n_sample = train_x.shape[0]
     for i in range(int(n_iteration)):
         # validate the model
-        #if i % valid_steps == 0:
+        #if i % validate_steps == 0:
         #    loss, accu = sess.run([cost, accuracy], feed_dict={x: valid_x, y: valid_y})
         #    print '{i} batches fed in, valid set, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i, l=loss, a=accu * 100.)
         # get a batch of samples
@@ -106,7 +106,7 @@ if __name__ == '__main__':
         batch_x = train_x[idx, :, :]
         batch_y = train_y[idx, :]
         sess.run(train_step, feed_dict={x: batch_x, y: batch_y})
-        if i % 10 == 0:
+        if i % display_steps == 0:
             loss, accu, gradient_mag, weights_mag = sess.run([cost, accuracy, grads_mag, tavr_mag], feed_dict={x: batch_x, y: batch_y})
             print '{i} samples fed in, training minibatch, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i*batch_size, l=loss, a=accu * 100.)
             print '\tlog(avg grad) {g:.3f}, avg weight {w:.3f}'.format(g=np.log10(np.mean(gradient_mag)), w=np.mean(weights_mag))
