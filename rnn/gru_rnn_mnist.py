@@ -92,26 +92,37 @@ if __name__ == '__main__':
     test_x = mnist.test.images.reshape([-1, 28, 28])
     test_y = mnist.test.labels
 
-    # with tf.Session() as sess:
-    sess = tf.Session()
-    sess.run(tf.initialize_all_variables())
-    n_sample = train_x.shape[0]
-    for i in range(int(n_iteration)):
-        # validate the model
-        #if i % validate_steps == 0:
-        #    loss, accu = sess.run([cost, accuracy], feed_dict={x: valid_x, y: valid_y})
-        #    print '{i} batches fed in, valid set, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i, l=loss, a=accu * 100.)
-        # get a batch of samples
-        idx = np.random.randint(0, n_sample, batch_size)
-        batch_x = train_x[idx, :, :]
-        batch_y = train_y[idx, :]
-        sess.run(train_step, feed_dict={x: batch_x, y: batch_y})
-        if i % display_steps == 0:
-            loss, accu, gradient_mag, weights_mag = sess.run([cost, accuracy, grads_mag, tavr_mag], feed_dict={x: batch_x, y: batch_y})
-            print '{i} samples fed in, training minibatch, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i*batch_size, l=loss, a=accu * 100.)
-            print '\tlog(avg grad) {g:.3f}, avg weight {w:.3f}'.format(g=np.log10(np.mean(gradient_mag)), w=np.mean(weights_mag))
-    # test the model
-    accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
-    print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
-    sess.close()
+    with tf.Session() as sess:
+        saver = tf.train.Saver()
+        #sess = tf.Session()
+        sess.run(tf.initialize_all_variables())
+        n_sample = train_x.shape[0]
+        for i in range(int(n_iteration)):
+            # validate the model
+            if i % validate_steps == 0:
+                loss, accu = sess.run([cost, accuracy], feed_dict={x: valid_x, y: valid_y})
+                print '{i} batches fed in, valid set, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i, l=loss, a=accu * 100.)
+                saver.save(sess, 'tmp/gru.ckpt', global_step=i)
+            # get a batch of samples
+            idx = np.random.randint(0, n_sample, batch_size)
+            batch_x = train_x[idx, :, :]
+            batch_y = train_y[idx, :]
+            sess.run(train_step, feed_dict={x: batch_x, y: batch_y})
+            if i % display_steps == 0:
+                loss, accu, gradient_mag, weights_mag = sess.run([cost, accuracy, grads_mag, tavr_mag], feed_dict={x: batch_x, y: batch_y})
+                print '{i} samples fed in, training minibatch, loss {l:.4f}, accuracy {a:.2f}%'.format(i=i*batch_size, l=loss, a=accu * 100.)
+                print '\tlog(avg grad) {g:.3f}, avg weight {w:.3f}'.format(g=np.log10(np.mean(gradient_mag)), w=np.mean(weights_mag))
+        saver.save(sess, 'tmp/gru_final.ckpt')
+        # test the model
+        accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
+        print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
+    #sess.close()
+    
+    saver2 = tf.train.Saver()
+    with tf.Session() as sess:
+        for f in ['gru.ckpt-600', 'gru.ckpt-700', 'gru.ckpt-800', 'gru.ckpt-900', 'gru_final.ckpt']:
+            saver2.restore(sess, 'tmp/' + f)
+            # test the model
+            accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
+            print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
     
