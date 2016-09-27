@@ -48,7 +48,7 @@ if __name__ == '__main__':
     n_input = 28
     n_step = 28
     n_class = 10
-    n_hidden = 4 * n_input
+    n_hidden = [2*n_input, n_input]
     batch_size = 100
     learning_rate = 1e-2
     n_iteration = 1000
@@ -59,25 +59,33 @@ if __name__ == '__main__':
     y = tf.placeholder(tf.float32, [None, n_class])
     
     # initialise weights as normal distr
-    W_out = weight_variable_normal([n_hidden, n_class])
+    W_out = weight_variable_normal([n_hidden[-1], n_class])
     b_out = tf.Variable(np.zeros((n_class), np.float32))
 
-    gru = GRUCell(n_input, n_hidden)
-
+    # multi-layer GRUCells
+    layer_size = [n_input] + n_hidden
+    gru_cells = []
+    for i in range(len(layer_size)-1):
+        gru = GRUCell(layer_size[i], layer_size[i+1])
+        gru_cells.append(gru)
+        
     states = []
     for t in range(n_step):
         x_t = x[:, t, :]
-        if t == 0:
-            h_prev = tf.zeros(shape=[tf.shape(x)[0], n_hidden], dtype=tf.float32)
-        else:
-            h_prev = states[-1]
-        h_t = gru(h_prev, x_t)
-        states.append(h_t)
-    proba = tf.nn.softmax(tf.matmul(states[-1], W_out) + b_out)
+        state = []
+        for gru, i in zip(gru_cells, range(len(gru_cells))):
+            if t == 0:
+                h_prev = tf.zeros(shape=[tf.shape(x_t)[0], n_hidden[i]], dtype=tf.float32)
+            else:
+                h_prev = states[-1][i]
+            h_t = gru(h_prev, x_t)
+            state.append(h_t)
+            x_t = h_t
+        states.append(state)
+    proba = tf.nn.softmax(tf.matmul(states[-1][-1], W_out) + b_out)
     pred = tf.argmax(proba, dimension=1)
     accuracy = tf.reduce_mean(tf.cast(tf.equal(pred, tf.argmax(y, dimension=1)), tf.float32))
     cost = tf.reduce_mean(tf.reduce_sum(-y * tf.log(proba), 1))
-    # use the wrapped Adam
     train_step = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
     
     mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
@@ -112,9 +120,10 @@ if __name__ == '__main__':
     print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
     sess.close()
     
-    saver2 = tf.train.Saver()
-    with tf.Session() as sess:
-        saver2.restore(sess, 'tmp/gru-final.ckpt')
-        # test the model
-        accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
-        print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
+    saver = tf.train.Saver()
+    sess = tf.Session()
+    saver.restore(sess, 'tmp/gru-final.ckpt')
+    # test the model
+    accu = sess.run(accuracy, feed_dict={x: test_x, y: test_y})
+    print 'test set, accuracy {a:.2f}%'.format(a=accu * 100.)
+    sess.close()
