@@ -4,6 +4,9 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import array_ops
 from tensorflow.examples.tutorials.mnist import input_data
+from PIL import Image
+import matplotlib.pyplot as plt
+from vis_util import tile_raster_images
 
 
 def weight_variable_normal(shape, stddev=None):
@@ -54,9 +57,9 @@ if __name__ == '__main__':
     n_output = n_input
     n_step = 14
     n_hidden = 2 * n_input
-    gamma = 1e-3
+    gamma = 1e-2
     learning_rate = 1e-2
-    n_epochs = 1
+    n_epoch = 1
     validation_steps = 5000
 
     x = tf.placeholder(tf.float32, [n_step, n_input])
@@ -89,7 +92,20 @@ if __name__ == '__main__':
         h = decoder_states[i]
         out = tf.sigmoid(tf.matmul(h, W_o) + b_o)
         outputs.append(out)
-    outputs = tf.concat(0, outputs) # outputs: n_step x n_output    
+    outputs = tf.concat(0, outputs) # outputs: n_step x n_output
+    
+    # serving
+    decoder_states_run = [encoder_states[-1]]
+    outputs_run = list()
+    initial_input = tf.zeros([1, n_input], tf.float32)
+    for t in range(0, n_step):
+        h_prev = decoder_states_run[-1]
+        x_t = initial_input if t == 0 else outputs_run[-1]
+        h_t = decoder_cell(h_prev, x_t)
+        out_t = tf.sigmoid(tf.matmul(h_t, W_o) + b_o)
+        outputs_run.append(out_t)
+        decoder_states_run.append(h_t)
+    outputs_run = tf.concat(0, outputs_run)  # outputs: n_step x n_output
     
     # loss
     loss = tf.reduce_mean(tf.squared_difference(outputs, x))
@@ -112,12 +128,11 @@ if __name__ == '__main__':
     test_x = mnist.test.images.reshape([-1, 28, 28])[:, ::2, ::2]
     print '{} test samples'.format(test_x.shape[0])
 
-    saver = tf.train.Saver()
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     n_sample = train_x.shape[0]
     np.random.seed(1001)
-    for i in range(int(n_epochs * n_sample)):
+    for i in range(int(n_epoch * n_sample)):
         idx = np.random.randint(n_sample)
         sample = train_x[idx, :, :]
         sess.run(train_step, feed_dict={x: sample})
@@ -140,5 +155,36 @@ if __name__ == '__main__':
                 l=validation_loss,
                 r=parameter_regu
             )
-    saver.save(sess, 'seq_to_seq_rnn-final.ckpt')
+            
+    def gray2rgb(im):
+        return np.stack((im, im, im), axis=2)
+    
+    #fig = plt.figure(0)
+    #idx = 1000
+    #sample = test_x[idx, :, :]
+    #sample_rec = sess.run(outputs_run, feed_dict={x: sample})
+    #ax = fig.add_subplot(1, 2, 1)
+    #ax.imshow(gray2rgb(sample))
+    #ax.set_title(idx)
+    #ax.axis('off')
+    #ax = fig.add_subplot(1, 2, 2)
+    #ax.imshow(gray2rgb(sample_rec))
+    #ax.axis('off')
+    #fig.show()
+
+    images = list()
+    for i in range(20):
+        idx = np.random.randint(test_x.shape[0])
+        sample = test_x[idx, :, :]
+        sample_rec = sess.run(outputs_run, feed_dict={x: sample})
+        images.append(sample.reshape([1, -1]))
+        images.append(sample_rec.reshape([1, -1]))
+    images = np.concatenate(images, axis=0)
+    im = tile_raster_images(images, [n_input, n_input], [5, 8])
+    fig = plt.figure(0)
+    ax = fig.add_subplot(111)
+    ax.imshow(gray2rgb(im))
+    ax.axis('off')
+    fig.show()
+    
     sess.close()
