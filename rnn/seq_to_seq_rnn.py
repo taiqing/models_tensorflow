@@ -9,6 +9,21 @@ import matplotlib.pyplot as plt
 from vis_util import tile_raster_images
 
 
+class Struct(dict):
+    def __init__(self, **kwargs):
+        super(Struct, self).__init__(**kwargs)
+        self.__dict__ = self
+
+
+class GraphWrapper(object):
+    def __init__(self, graph, phr, var, tsr, ops):
+        self.graph = graph
+        self.phr = phr
+        self.var = var
+        self.tsr = tsr
+        self.ops = ops
+
+
 def weight_variable_normal(shape, stddev=None):
     if stddev is not None:
         std = stddev
@@ -31,7 +46,7 @@ class GRUCell(object):
         self.W_z = weight_variable_normal([n_input + n_hidden, n_hidden])
         self.W_r = weight_variable_normal([n_input + n_hidden, n_hidden])
         self.W_c = weight_variable_normal([n_input + n_hidden, n_hidden])
-        self.paramters = [self.W_z, self.W_r, self.W_c]
+        self.vars = [self.W_z, self.W_r, self.W_c]
 
     def __call__(self, h, x):
         """
@@ -48,6 +63,130 @@ class GRUCell(object):
         h_candidate = tf.tanh(tf.matmul(array_ops.concat(1, [r * h, x]), self.W_c))
         new_h = (1 - z) * h + z * h_candidate
         return new_h
+
+
+class TemporalAutoEncoder(object):
+    """ one-layer temporal auto encoder """
+    def __init__(self, n_input, n_step, n_hidden):
+        self.n_input = n_input
+        self.n_output = self.n_input
+        self.n_step = n_step
+        self.n_hidden = n_hidden
+
+        # paremters to learn
+        self.params = {}
+
+        # for serving
+        self.updated = True
+        self.G_run = None
+        self.sess_run = None
+
+    def __build_graph__(self):
+        encoder_cell = GRUCell(self.n_input, self.n_hidden)
+        decoder_cell = GRUCell(self.n_input, self.n_hidden)
+        W_o = weight_variable_normal([self.n_hidden, self.n_output])
+        b_o = tf.Variable(np.zeros(self.n_output, dtype=np.float32))
+
+        # variables
+        self.vars = encoder_cell.vars + decoder_cell.vars + [W_o, b_o]
+
+        # placeholders
+        x = tf.placeholder(tf.float32, [self.n_step, self.n_input])
+        learning_rate = tf.placeholder(tf.float32)
+        gamma = tf.placeholder(tf.float32)
+
+        # encoding
+        h0 = tf.zeros((1, self.n_hidden), tf.float32)
+        encoder_states = [h0]
+        for i in range(self.n_step-1, -1, -1):
+            h_prev = encoder_states[-1]
+            x_t = tf.reshape(x[i, :], [1, -1])
+            h_t = encoder_cell(h_prev, x_t)  # reads input in reverse order
+            encoder_states.append(h_t)
+
+        # decoding
+        decoder_states = [encoder_states[-1]]
+        initial_input = tf.zeros([1, self.n_input], tf.float32)
+        for t in range(0, self.n_step):
+            h_prev = decoder_states[-1]
+            x_t = initial_input if t == 0 else tf.reshape(x[t - 1, :], [1, -1])
+            h_t = decoder_cell(h_prev, x_t)
+            decoder_states.append(h_t)
+
+        # output
+        outputs = list()
+        for i in range(1, len(decoder_states)):
+            h = decoder_states[i]
+            out = tf.sigmoid(tf.matmul(h, W_o) + b_o)
+            outputs.append(out)
+        outputs = tf.concat(0, outputs)  # outputs: n_step x n_output
+
+        # serving
+        decoder_states_run = [encoder_states[-1]]
+        outputs_run = list()
+        initial_input = tf.zeros([1, self.n_input], tf.float32)
+        for t in range(0, n_step):
+            h_prev = decoder_states_run[-1]
+            x_t = initial_input if t == 0 else outputs_run[-1]
+            h_t = decoder_cell(h_prev, x_t)
+            out_t = tf.sigmoid(tf.matmul(h_t, W_o) + b_o)
+            outputs_run.append(out_t)
+            decoder_states_run.append(h_t)
+        outputs_run = tf.concat(0, outputs_run)  # outputs: n_step x n_output
+
+        # loss
+        loss = tf.reduce_mean(tf.squared_difference(outputs, x))
+
+        # l2-norm of paramters
+        regularizer = 0.
+        for v in self.vars:
+            regularizer += tf.reduce_mean(tf.square(v))
+
+        # cost
+        cost = loss + gamma * regularizer
+        train_step = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
+
+        init_vars = tf.global_variables_initializer()
+
+        phr = Struct(x=x, learning_rate=learning_rate, gamma=gamma)
+        var = self.vars
+        tsr = Struct(cost=cost, loss=loss, regularizer=regularizer, outputs_run=outputs_run)
+        ops = Struct(train_step=train_step, init_vars=init_vars)
+
+    def fit(self, train_x, valid_x, learning_rate, gamma, n_epoch, validation_steps):
+        np.random.seed(1001)
+        n_sample = train_x.shape[0]
+
+        G = self.__build_graph__()
+        sess = tf.Session(graph=G)
+        with sess.as_default():
+            G.ops.init_vars.run()
+            for i in range(int(n_epoch * n_sample)):
+                idx = np.random.randint(n_sample)
+                sample = train_x[idx, :, :]
+                G.ops.train_step.run(feed_dict={
+                    G.phr.x: sample,
+                    G.phr.learning_rate: learning_rate,
+                    G.phr.gamma: gamma})
+                if i % int(validation_steps) == 0:
+                    cost = 0.
+                    loss = 0.
+                    regu = 0.
+                    for j in range(validation_x.shape[0]):
+                        c, l, r = sess.run([G.tsr.cost, G.tsr.loss, G.tsr.regularizer], feed_dict={G.phr.x: validation_x[j, :, :]})
+                        cost += c
+                        loss += l
+                        regu += r
+                    cost /= validation_x.shape[0]
+                    loss /= validation_x.shape[0]
+                    regu /= validation_x.shape[0]
+                    print 'iteration {i}: validation: {n} samples, cost {c:.5f}, loss {l:.5f}, paramter regularizer {r:.5f}'.format(
+                        i=i,
+                        n=validation_x.shape[0],
+                        c=cost,
+                        l=loss,
+                        r=regu
+                    )
 
 
 if __name__ == '__main__':
@@ -113,7 +252,7 @@ if __name__ == '__main__':
     # l2-norm of paramters
     regularizer = 0.
     for cell in [encoder_cell, decoder_cell]:
-        for param in cell.paramters:
+        for param in cell.vars:
             regularizer += tf.reduce_mean(tf.square(param))
 
     # cost
@@ -148,7 +287,7 @@ if __name__ == '__main__':
             validation_cost /= validation_x.shape[0]
             validation_loss /= validation_x.shape[0]
             parameter_regu /= validation_x.shape[0]
-            print 'iteration {i}: validation: {n} samples, cost {c}, loss {l}, paramter regularizer {r}'.format(
+            print 'iteration {i}: validation: {n} samples, cost {c:.5f}, loss {l:.5f}, paramter regularizer {r:.5f}'.format(
                 i=i,
                 n=validation_x.shape[0],
                 c=validation_cost,
