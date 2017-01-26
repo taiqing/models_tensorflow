@@ -82,7 +82,7 @@ class TemporalAutoEncoder(object):
         self.sess_serve = None
 
     def __del__(self):
-        if self.sess_run is not None:
+        if self.sess_serve is not None:
             self.sess_serve.close()
 
     def __build_graph__(self):
@@ -97,25 +97,26 @@ class TemporalAutoEncoder(object):
             self.variables = join_dicts(join_dicts(encoder_cell.vars, decoder_cell.vars), {'W_o': W_o, 'b_o': b_o})
 
             # placeholders
-            x = tf.placeholder(tf.float32, [self.n_step, self.n_input], name='x')
+            x = tf.placeholder(tf.float32, [None, self.n_step, self.n_input], name='x')
             learning_rate = tf.placeholder(tf.float32, name='learning_rate')
             gamma = tf.placeholder(tf.float32, name='gamma')
 
             # encoding
-            h0 = tf.zeros((1, self.n_hidden), tf.float32)
+            n_sample = tf.shape(x)[0]
+            h0 = tf.zeros((n_sample, self.n_hidden), tf.float32)
             encoder_states = [h0]
             for i in range(self.n_step-1, -1, -1):
                 h_prev = encoder_states[-1]
-                x_t = tf.reshape(x[i, :], [1, -1])
+                x_t = x[:, i, :]
                 h_t = encoder_cell(h_prev, x_t)  # reads input in reverse order
                 encoder_states.append(h_t)
 
             # decoding
             decoder_states = [encoder_states[-1]]
-            initial_input = tf.zeros([1, self.n_input], tf.float32)
+            initial_input = tf.zeros([n_sample, self.n_input], tf.float32)
             for t in range(0, self.n_step):
                 h_prev = decoder_states[-1]
-                x_t = initial_input if t == 0 else tf.reshape(x[t - 1, :], [1, -1])
+                x_t = initial_input if t == 0 else x[:, t - 1, :]
                 h_t = decoder_cell(h_prev, x_t)
                 decoder_states.append(h_t)
 
@@ -125,12 +126,12 @@ class TemporalAutoEncoder(object):
                 h = decoder_states[i]
                 out = tf.sigmoid(tf.matmul(h, W_o) + b_o)
                 outputs.append(out)
-            outputs = tf.concat(0, outputs)  # outputs: n_step x n_output
+            outputs = tf.pack(outputs, axis=1)  # outputs: n_samples x n_step x n_output
 
             # serving
             decoder_states_run = [encoder_states[-1]]
             outputs_run = list()
-            initial_input = tf.zeros([1, self.n_input], tf.float32)
+            initial_input = tf.zeros([n_sample, self.n_input], tf.float32)
             for t in range(0, n_step):
                 h_prev = decoder_states_run[-1]
                 x_t = initial_input if t == 0 else outputs_run[-1]
@@ -138,7 +139,7 @@ class TemporalAutoEncoder(object):
                 out_t = tf.sigmoid(tf.matmul(h_t, W_o) + b_o)
                 outputs_run.append(out_t)
                 decoder_states_run.append(h_t)
-            outputs_run = tf.concat(0, outputs_run)  # outputs: n_step x n_output
+            outputs_run = tf.pack(outputs_run, axis=1)  # outputs: n_samples x n_step x n_output
 
             # loss
             loss = tf.reduce_mean(tf.squared_difference(outputs, x))
@@ -158,7 +159,7 @@ class TemporalAutoEncoder(object):
         self.tensors = dict(cost=cost, loss=loss, regularizer=regularizer, outputs_run=outputs_run)
         self.operations = dict(train_step=train_step, init_vars=init_vars)
 
-    def fit(self, train_x, validation_x, learning_rate, gamma, n_epoch, validation_steps):
+    def fit(self, train_x, validation_x, learning_rate, gamma, n_epoch, batch_size, validation_steps):
         """
         :param train_x: np.ndarray of size (n_sample, n_step, n_input)
         :param validation_x: np.ndarray of size (n_sample, n_step, n_input)
@@ -174,26 +175,16 @@ class TemporalAutoEncoder(object):
         sess = tf.Session(graph=self.graph)
         with sess.as_default():
             self.operations['init_vars'].run()
-            for i in range(int(n_epoch * n_sample)):
-                idx = np.random.randint(n_sample)
-                x = train_x[idx, :, :]
+            for i in range(int(n_epoch * n_sample / batch_size)):
+                selected_idx = np.random.permutation(n_sample)[0:batch_size]
+                x = train_x[selected_idx, :, :]
                 self.operations['train_step'].run(feed_dict={
                     self.placeholders['x']: x,
                     self.placeholders['learning_rate']: learning_rate,
                     self.placeholders['gamma']: gamma})
                 if i % int(validation_steps) == 0:
-                    cost = 0.
-                    loss = 0.
-                    regu = 0.
-                    for j in range(validation_x.shape[0]):
-                        c, l, r = sess.run([self.tensors['cost'], self.tensors['loss'], self.tensors['regularizer']],
-                                           feed_dict={self.placeholders['x']: validation_x[j, :, :], self.placeholders['gamma']: gamma})
-                        cost += c
-                        loss += l
-                        regu += r
-                    cost /= validation_x.shape[0]
-                    loss /= validation_x.shape[0]
-                    regu /= validation_x.shape[0]
+                    cost, loss, regu = sess.run([self.tensors['cost'], self.tensors['loss'], self.tensors['regularizer']],
+                                           feed_dict={self.placeholders['x']: validation_x, self.placeholders['gamma']: gamma})
                     print 'iteration {i}: validation: {n} samples, cost {c:.5f}, loss {l:.5f}, paramter regularizer {r:.5f}'.format(
                         i=i,
                         n=validation_x.shape[0],
@@ -230,45 +221,45 @@ if __name__ == '__main__':
     tf.reset_default_graph()
     plt.close('all')
     
-    n_input = 14
+    n_input = 28
     n_output = n_input
-    n_step = 14
+    n_step = 28
     n_hidden = 2 * n_input
     gamma = 1e-2
     learning_rate = 1e-2
-    n_epoch = 0.01
-    validation_steps = 5000
+    n_epoch = 10
+    batch_size = 100
+    validation_steps = 500
 
     mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
-    train_x = mnist.train.images.reshape([-1, 28, 28])[:, ::2, ::2]
+    train_x = mnist.train.images.reshape([-1, 28, 28])
     print '{} training samples'.format(train_x.shape[0])
-    validation_x = mnist.validation.images.reshape([-1, 28, 28])[:, ::2, ::2]
+    validation_x = mnist.validation.images.reshape([-1, 28, 28])[::5, :, :]
     print '{} validation samples'.format(validation_x.shape[0])
-    test_x = mnist.test.images.reshape([-1, 28, 28])[:, ::2, ::2]
+    test_x = mnist.test.images.reshape([-1, 28, 28])
     print '{} test samples'.format(test_x.shape[0])
 
     model = TemporalAutoEncoder(n_input=n_input, n_step=n_step, n_hidden=n_hidden)
     model.fit(train_x=train_x, validation_x=validation_x,
-              gamma=gamma, learning_rate=learning_rate, n_epoch=n_epoch,
+              n_epoch=n_epoch, batch_size=batch_size,
+              gamma=gamma, learning_rate=learning_rate, 
               validation_steps=validation_steps)
     
-    model.dump('model.pkl')
-    
-    model.load('model.pkl')
-
+    model.dump('seq2seq_model.pkl')
 
     def gray2rgb(im):
         return np.stack((im, im, im), axis=2)
 
+    n_test_samples = 20
+    selected_idx = np.random.permutation(test_x.shape[0])[0 : n_test_samples]
+    x = test_x[selected_idx, :, :]
+    x_output = model.predict(x)
     images = list()
-    for i in range(20):
-        idx = np.random.randint(test_x.shape[0])
-        x = test_x[idx, :, :]
-        x_output = model.predict(x)
-        images.append(x.reshape([1, -1]))
-        images.append(x_output.reshape([1, -1]))
+    for i in range(x.shape[0]):
+        images.append(x[i, :, :].reshape((1, -1)))
+        images.append(x_output[i, :, :].reshape((1, -1)))
     images = np.concatenate(images, axis=0)
-    im = tile_raster_images(images, [n_input, n_input], [5, 8])
+    im = tile_raster_images(images, [n_input, n_input], [5, n_test_samples/5])
     fig = plt.figure(0)
     ax = fig.add_subplot(111)
     ax.imshow(gray2rgb(im))
