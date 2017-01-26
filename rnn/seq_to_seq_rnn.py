@@ -225,7 +225,7 @@ if __name__ == '__main__':
     n_output = n_input
     n_step = 28
     n_hidden = 2 * n_input
-    gamma = 1e-2
+    gamma = 1e-3
     learning_rate = 1e-2
     n_epoch = 10
     batch_size = 100
@@ -259,7 +259,7 @@ if __name__ == '__main__':
         images.append(x[i, :, :].reshape((1, -1)))
         images.append(x_output[i, :, :].reshape((1, -1)))
     images = np.concatenate(images, axis=0)
-    im = tile_raster_images(images, [n_input, n_input], [5, n_test_samples/5])
+    im = tile_raster_images(images, [n_input, n_input], [5, n_test_samples*2/5])
     fig = plt.figure(0)
     ax = fig.add_subplot(111)
     ax.imshow(gray2rgb(im))
