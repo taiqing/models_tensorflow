@@ -24,15 +24,15 @@ def join_dicts(dict1, dict2):
 
 
 def weight_variable_normal(shape, stddev=None):
-    if stddev is not None:
-        std = stddev
-    else:
-        std = 1.0 / np.sqrt(shape[0])
-    initial = tf.truncated_normal(shape=shape, mean=0.0, stddev=std)
+    if stddev is None:
+        stddev = 1.0 / np.sqrt(shape[0])
+    initial = tf.truncated_normal(shape=shape, mean=0.0, stddev=stddev)
     return tf.Variable(initial)
 
 
-def weight_variable_uniform(shape, radius):
+def weight_variable_uniform(shape, radius=None):
+    if radius is None:
+        radius = 1.0 / np.sqrt(shape[0])
     initial = tf.random_uniform(shape=shape, minval=-radius, maxval=radius)
     return tf.Variable(initial)
 
@@ -40,13 +40,23 @@ def weight_variable_uniform(shape, radius):
 class GRUCell(object):
     # GRU description in http://colah.github.io/posts/2015-08-Understanding-LSTMs/
     
-    def __init__(self, n_input, n_hidden, name='GRU'):
-        self.W_z = weight_variable_normal([n_input + n_hidden, n_hidden])
-        self.W_r = weight_variable_normal([n_input + n_hidden, n_hidden])
-        self.W_c = weight_variable_normal([n_input + n_hidden, n_hidden])
+    def __init__(self, n_input, n_hidden, stddev=None, name='GRU'):
+        # update gate
+        self.W_z = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+        self.b_z = tf.Variable(tf.zeros(n_hidden, tf.float32))
+        # reset gate
+        self.W_r = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+        self.b_r = tf.Variable(tf.zeros(n_hidden, tf.float32))
+        # candidate generation
+        self.W_c = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+        self.b_c = tf.Variable(tf.zeros(n_hidden, tf.float32))
+        
         self.vars = {':'.join([name, 'W_z']): self.W_z,
+                     ':'.join([name, 'b_z']): self.b_z,
                      ':'.join([name, 'W_r']): self.W_r,
-                     ':'.join([name, 'W_c']): self.W_c}
+                     ':'.join([name, 'b_r']): self.b_r,
+                     ':'.join([name, 'W_c']): self.W_c,
+                     ':'.join([name, 'b_c']): self.b_c}
 
     def __call__(self, h, x):
         """
@@ -56,22 +66,23 @@ class GRUCell(object):
         """
         hx = array_ops.concat(1, [h, x])
         # z: update gate
-        z = tf.sigmoid(tf.matmul(hx, self.W_z))
+        z = tf.sigmoid(tf.matmul(hx, self.W_z) + self.b_z)
         # r: reset gate
-        r = tf.sigmoid(tf.matmul(hx, self.W_r))
+        r = tf.sigmoid(tf.matmul(hx, self.W_r) + self.b_r)
         # h_c: candidate hidden state
-        h_candidate = tf.tanh(tf.matmul(array_ops.concat(1, [r * h, x]), self.W_c))
+        h_candidate = tf.tanh(tf.matmul(array_ops.concat(1, [r * h, x]), self.W_c) + self.b_c)
         new_h = (1 - z) * h + z * h_candidate
         return new_h
 
 
 class TemporalAutoEncoder(object):
     """ one-layer temporal auto encoder """
-    def __init__(self, n_input, n_step, n_hidden):
+    def __init__(self, n_input, n_step, n_hidden, stddev=None):
         self.n_input = n_input
         self.n_output = self.n_input
         self.n_step = n_step
         self.n_hidden = n_hidden
+        self.stddev = stddev
         
         # build graph
         self.__build_graph__()
@@ -88,9 +99,9 @@ class TemporalAutoEncoder(object):
     def __build_graph__(self):
         self.graph = tf.Graph()
         with self.graph.as_default():
-            encoder_cell = GRUCell(self.n_input, self.n_hidden, name='encoder:0')
-            decoder_cell = GRUCell(self.n_input, self.n_hidden, name='decoder:0')
-            W_o = weight_variable_normal([self.n_hidden, self.n_output])
+            encoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, name='encoder:0')
+            decoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, name='decoder:0')
+            W_o = weight_variable_normal([self.n_hidden, self.n_output], self.stddev)
             b_o = tf.Variable(np.zeros(self.n_output, dtype=np.float32))
 
             # variables
@@ -197,8 +208,8 @@ class TemporalAutoEncoder(object):
 
     def predict(self, x):
         """
-        :param x: one sample, np.ndarray of size (n_step, n_input)
-        :return: np.ndarray of size (n_step, n_input)
+        :param x: np.ndarray of size (n_sample, n_step, n_input)
+        :return: np.ndarray of size (n_sample, n_step, n_output)
         """
         if self.sess_serve is None:
             self.sess_serve = tf.Session(graph=self.graph)
@@ -220,6 +231,7 @@ class TemporalAutoEncoder(object):
 if __name__ == '__main__':
     tf.reset_default_graph()
     plt.close('all')
+    np.random.seed(73)
     
     n_input = 28
     n_output = n_input
@@ -227,7 +239,7 @@ if __name__ == '__main__':
     n_hidden = 2 * n_input
     gamma = 1e-3
     learning_rate = 1e-2
-    n_epoch = 10
+    n_epoch = 5
     batch_size = 100
     validation_steps = 500
 
@@ -246,6 +258,11 @@ if __name__ == '__main__':
               validation_steps=validation_steps)
     
     model.dump('seq2seq_model.pkl')
+    
+    # evaluate on test set
+    y = model.predict(test_x)
+    error = np.mean((y - test_x) * (y - test_x))
+    print 'test set error is {:.4f}'.format(error)
 
     def gray2rgb(im):
         return np.stack((im, im, im), axis=2)
