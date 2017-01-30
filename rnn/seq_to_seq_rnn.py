@@ -1,11 +1,11 @@
 # coding=utf-8
 
+import matplotlib
+matplotlib.use('Agg')
 import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import array_ops
 from tensorflow.examples.tutorials.mnist import input_data
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import cPickle
 
@@ -95,7 +95,8 @@ class TemporalAutoEncoder(object):
         self.stddev = stddev
 
         # parameters to learn: values of the trainable variables
-        self.parameters = dict()
+        self.parameters = None
+        self.graph = None
 
         # for predicting
         self.sess_serve = None
@@ -195,29 +196,34 @@ class TemporalAutoEncoder(object):
         np.random.seed(1001)
         n_sample = train_x.shape[0]
 
-        self.__build_graph__()
-        sess = tf.Session(graph=self.graph)
-        with sess.as_default():
-            self.operations['init_vars'].run()
-            for i in range(int(n_epoch * n_sample / batch_size)):
-                selected_idx = np.random.permutation(n_sample)[0:batch_size]
-                x = train_x[selected_idx, :, :]
-                self.operations['train_step'].run(feed_dict={
-                    self.placeholders['x']: x,
-                    self.placeholders['learning_rate']: learning_rate,
-                    self.placeholders['gamma']: gamma})
-                if i % int(validation_steps) == 0:
-                    cost, loss, regu = sess.run([self.tensors['cost'], self.tensors['loss'], self.tensors['regularizer']],
-                                           feed_dict={self.placeholders['x']: validation_x, self.placeholders['gamma']: gamma})
-                    print 'iteration {i}: validation: {n} samples, cost {c:.5f}, loss {l:.5f}, paramter regularizer {r:.5f}'.format(
-                        i=i,
-                        n=validation_x.shape[0],
-                        c=cost,
-                        l=loss,
-                        r=regu
-                    )
-            for k, v in self.variables.iteritems():
-                self.parameters[k] = sess.run(v)
+        self.__build_graph__(variable_values=self.parameters)
+        with tf.Session(graph=self.graph) as sess:
+            with sess.as_default():
+                self.operations['init_vars'].run()
+                sample_counter = 0
+                for i in range(int(n_epoch * n_sample / batch_size)):
+                    # validate the model
+                    if i % int(validation_steps) == 0:
+                        cost, loss, regu = sess.run([self.tensors['cost'], self.tensors['loss'], self.tensors['regularizer']],
+                                               feed_dict={self.placeholders['x']: validation_x, self.placeholders['gamma']: gamma})
+                        print '{i} samples fed in: validation: {n} samples, cost {c:.5f}, loss {l:.5f}, paramter regularizer {r:.5f}'.format(
+                            i=sample_counter,
+                            n=validation_x.shape[0],
+                            c=cost,
+                            l=loss,
+                            r=regu
+                        )
+                    selected_idx = np.random.permutation(n_sample)[0:batch_size]
+                    x = train_x[selected_idx, :, :]
+                    sample_counter += x.shape[0]
+                    self.operations['train_step'].run(feed_dict={
+                        self.placeholders['x']: x,
+                        self.placeholders['learning_rate']: learning_rate,
+                        self.placeholders['gamma']: gamma})
+
+                self.parameters = dict()
+                for k, v in self.variables.iteritems():
+                    self.parameters[k] = sess.run(v)
 
     def predict(self, x):
         """
@@ -225,6 +231,8 @@ class TemporalAutoEncoder(object):
         :return: np.ndarray of size (n_sample, n_step, n_output)
         """
         if self.sess_serve is None:
+            if self.graph is None:
+                self.__build_graph__()
             self.sess_serve = tf.Session(graph=self.graph)
         feed_dict = dict()
         for k, v in self.variables.iteritems():
@@ -250,7 +258,6 @@ class TemporalAutoEncoder(object):
         self.n_output = model['n_output']
         self.n_hidden = model['n_hidden']
         self.n_step = model['n_step']
-        self.__build_graph__(variable_values=self.parameters)
 
 
 if __name__ == '__main__':
@@ -264,7 +271,7 @@ if __name__ == '__main__':
     n_hidden = 2 * n_input
     gamma = 1e-3
     learning_rate = 1e-2
-    n_epoch = 10
+    n_epoch = 1
     batch_size = 100
     validation_steps = 500
 
@@ -277,6 +284,7 @@ if __name__ == '__main__':
     print '{} test samples'.format(test_x.shape[0])
 
     model = TemporalAutoEncoder(n_input=n_input, n_step=n_step, n_hidden=n_hidden)
+    n_epoch = 5
     model.fit(train_x=train_x, validation_x=validation_x,
               n_epoch=n_epoch, batch_size=batch_size,
               gamma=gamma, learning_rate=learning_rate, 
@@ -284,8 +292,13 @@ if __name__ == '__main__':
     
     model.dump('seq2seq_model.pkl')
     
-    #model = TemporalAutoEncoder()
-    #model.load('seq2seq_model.pkl')
+    model = TemporalAutoEncoder()
+    model.load('seq2seq_model.pkl')
+    n_epoch = 5
+    model.fit(train_x=train_x, validation_x=validation_x,
+              n_epoch=n_epoch, batch_size=batch_size,
+              gamma=gamma, learning_rate=learning_rate, 
+              validation_steps=validation_steps)
     
     # evaluate on test set
     y = model.predict(test_x)
