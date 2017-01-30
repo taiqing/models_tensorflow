@@ -239,7 +239,7 @@ if __name__ == '__main__':
     n_hidden = 2 * n_input
     gamma = 1e-3
     learning_rate = 1e-2
-    n_epoch = 5
+    n_epoch = 10
     batch_size = 100
     validation_steps = 500
 
