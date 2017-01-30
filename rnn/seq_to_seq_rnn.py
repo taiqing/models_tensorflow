@@ -4,6 +4,8 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import array_ops
 from tensorflow.examples.tutorials.mnist import input_data
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import cPickle
 
@@ -40,16 +42,24 @@ def weight_variable_uniform(shape, radius=None):
 class GRUCell(object):
     # GRU description in http://colah.github.io/posts/2015-08-Understanding-LSTMs/
     
-    def __init__(self, n_input, n_hidden, stddev=None, name='GRU'):
-        # update gate
-        self.W_z = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
-        self.b_z = tf.Variable(tf.zeros(n_hidden, tf.float32))
-        # reset gate
-        self.W_r = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
-        self.b_r = tf.Variable(tf.zeros(n_hidden, tf.float32))
-        # candidate generation
-        self.W_c = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
-        self.b_c = tf.Variable(tf.zeros(n_hidden, tf.float32))
+    def __init__(self, n_input, n_hidden, stddev=None, variable_values=None, name='GRU'):
+        if variable_values is None:
+            # update gate
+            self.W_z = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+            self.b_z = tf.Variable(tf.zeros(n_hidden, tf.float32))
+            # reset gate
+            self.W_r = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+            self.b_r = tf.Variable(tf.zeros(n_hidden, tf.float32))
+            # candidate generation
+            self.W_c = weight_variable_normal([n_input + n_hidden, n_hidden], stddev)
+            self.b_c = tf.Variable(tf.zeros(n_hidden, tf.float32))
+        else:
+            self.W_z = tf.Variable(variable_values[':'.join([name, 'W_z'])])
+            self.b_z = tf.Variable(variable_values[':'.join([name, 'b_z'])])
+            self.W_r = tf.Variable(variable_values[':'.join([name, 'W_r'])])
+            self.b_r = tf.Variable(variable_values[':'.join([name, 'b_r'])])
+            self.W_c = tf.Variable(variable_values[':'.join([name, 'W_c'])])
+            self.b_c = tf.Variable(variable_values[':'.join([name, 'b_c'])])
         
         self.vars = {':'.join([name, 'W_z']): self.W_z,
                      ':'.join([name, 'b_z']): self.b_z,
@@ -77,32 +87,34 @@ class GRUCell(object):
 
 class TemporalAutoEncoder(object):
     """ one-layer temporal auto encoder """
-    def __init__(self, n_input, n_step, n_hidden, stddev=None):
+    def __init__(self, n_input=None, n_step=None, n_hidden=None, stddev=None):
         self.n_input = n_input
         self.n_output = self.n_input
         self.n_step = n_step
         self.n_hidden = n_hidden
         self.stddev = stddev
-        
-        # build graph
-        self.__build_graph__()
 
-        # parameters to learn
+        # parameters to learn: values of the trainable variables
         self.parameters = dict()
 
+        # for predicting
         self.sess_serve = None
 
     def __del__(self):
         if self.sess_serve is not None:
             self.sess_serve.close()
 
-    def __build_graph__(self):
+    def __build_graph__(self, variable_values=None):
         self.graph = tf.Graph()
         with self.graph.as_default():
-            encoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, name='encoder:0')
-            decoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, name='decoder:0')
-            W_o = weight_variable_normal([self.n_hidden, self.n_output], self.stddev)
-            b_o = tf.Variable(np.zeros(self.n_output, dtype=np.float32))
+            encoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, variable_values=variable_values, name='encoder:0')
+            decoder_cell = GRUCell(self.n_input, self.n_hidden, self.stddev, variable_values=variable_values, name='decoder:0')
+            if variable_values is None:
+                W_o = weight_variable_normal([self.n_hidden, self.n_output], self.stddev)
+                b_o = tf.Variable(np.zeros(self.n_output, dtype=np.float32))
+            else:
+                W_o = tf.Variable(variable_values['W_o'])
+                b_o = tf.Variable(variable_values['b_o'])
 
             # variables
             self.variables = join_dicts(join_dicts(encoder_cell.vars, decoder_cell.vars), {'W_o': W_o, 'b_o': b_o})
@@ -183,6 +195,7 @@ class TemporalAutoEncoder(object):
         np.random.seed(1001)
         n_sample = train_x.shape[0]
 
+        self.__build_graph__()
         sess = tf.Session(graph=self.graph)
         with sess.as_default():
             self.operations['init_vars'].run()
@@ -222,10 +235,22 @@ class TemporalAutoEncoder(object):
         return output
         
     def dump(self, fpath):
-        cPickle.dump(self.parameters, open(fpath, 'wb'))
+        model = dict()
+        model['parameters'] = self.parameters
+        model['n_input'] = self.n_input
+        model['n_output'] = self.n_output
+        model['n_step'] = self.n_step
+        model['n_hidden'] = self.n_hidden
+        cPickle.dump(model, open(fpath, 'wb'))
     
     def load(self, fpath):
-        self.parameters = cPickle.load(open(fpath, 'rb'))
+        model = cPickle.load(open(fpath, 'rb'))
+        self.parameters = model['parameters']
+        self.n_input = model['n_input']
+        self.n_output = model['n_output']
+        self.n_hidden = model['n_hidden']
+        self.n_step = model['n_step']
+        self.__build_graph__(variable_values=self.parameters)
 
 
 if __name__ == '__main__':
@@ -259,6 +284,9 @@ if __name__ == '__main__':
     
     model.dump('seq2seq_model.pkl')
     
+    #model = TemporalAutoEncoder()
+    #model.load('seq2seq_model.pkl')
+    
     # evaluate on test set
     y = model.predict(test_x)
     error = np.mean((y - test_x) * (y - test_x))
@@ -282,3 +310,4 @@ if __name__ == '__main__':
     ax.imshow(gray2rgb(im))
     ax.axis('off')
     fig.show()
+    fig.savefig('{}.png'.format(fig.number))
